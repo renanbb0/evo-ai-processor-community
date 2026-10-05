@@ -6,10 +6,16 @@ pulling in the ADK / google-adk / langgraph dependency chain.
 
 from __future__ import annotations
 
+import re
 from typing import Optional, Tuple
 
 
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+
+# Bee: GPT-5.x/GPT-6 reason by default, and OpenAI rejects function tools
+# combined with reasoning on /v1/chat/completions (the endpoint LiteLLM uses
+# here). Sent via extra_body so LiteLLM forwards it without validating it.
+_OPENAI_REASONING_MODEL = re.compile(r"^(openai/)?gpt-(5\.\d+|6)($|[-.])")
 
 
 def normalize_model_for_provider(
@@ -27,6 +33,8 @@ def normalize_model_for_provider(
     Returns ``(normalized_model, extra_litellm_kwargs)``.
     """
     if provider != "openrouter":
+        if provider in (None, "openai") and _OPENAI_REASONING_MODEL.match(model or ""):
+            return model, {"extra_body": {"reasoning_effort": "none"}}
         return model, {}
 
     extra_kwargs = {"api_base": OPENROUTER_API_BASE}

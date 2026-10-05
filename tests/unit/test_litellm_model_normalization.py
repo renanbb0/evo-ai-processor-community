@@ -77,6 +77,33 @@ def test_normalize_is_idempotent_under_repeated_application():
     assert model == "openrouter/openai/gpt-4.1"
 
 
+# --- Bee: GPT-5.x/GPT-6 + tools on /v1/chat/completions -------------------
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "disables_reasoning"),
+    [
+        ("openai", "gpt-6-luna", True),
+        ("openai", "openai/gpt-6-astra", True),
+        (None, "gpt-6", True),
+        ("openai", "openai/gpt-5.6-luna", True),
+        ("openai", "gpt-5.1", True),
+        # gpt-5 (no minor) rejects "none"; gpt-4.x doesn't reason.
+        ("openai", "gpt-5", False),
+        ("openai", "gpt-5-mini", False),
+        ("openai", "gpt-4.1", False),
+        ("openai", "gpt-60", False),
+        # OpenRouter takes a different reasoning shape — left alone.
+        ("openrouter", "openai/gpt-6-luna", False),
+        ("gemini", "gemini/gemini-2.5-pro", False),
+    ],
+)
+def test_openai_reasoning_models_disable_reasoning(provider, model, disables_reasoning):
+    _, extra = normalize_model_for_provider(model, provider)
+    has_override = extra.get("extra_body") == {"reasoning_effort": "none"}
+    assert has_override is disables_reasoning
+
+
 # --- AC8: get_api_key returns (api_key, provider) --------------------------
 
 # The agent_utils module pulls in google-adk / langgraph / MCP through its
