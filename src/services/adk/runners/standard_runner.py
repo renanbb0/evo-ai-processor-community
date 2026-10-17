@@ -378,13 +378,17 @@ class StandardRunner:
                 logger.info(
                     "No meaningful content to process, skipping agent execution"
                 )
+                # Empty, not a placeholder: the bot-runtime forwards this text to
+                # the customer verbatim and only skips an empty reply.
                 return {
-                    "final_response": "No content to process",
+                    "final_response": "",
                     "message_history": [],
                 }
 
-            # Run agent and collect response
-            final_response_text = "No response captured."
+            # Run agent and collect response. Stays empty when the turn ends
+            # without text (e.g. right after transfer_to_human), so nothing is
+            # sent to the customer instead of a debug placeholder.
+            final_response_text = ""
             message_history = []
 
             try:

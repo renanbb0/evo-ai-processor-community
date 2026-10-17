@@ -1,0 +1,2 @@
+# Python sources copied from Linux production must retain their LF bytes.
+*.py text eol=lf
