@@ -1302,5 +1302,9 @@ class LlmAgentBuilder:
         )
         if sub_agents:
             root_llm_agent.sub_agents = sub_agents
+            # ADK only links parents during construction, not list assignment.
+            # Transfers from a specialist to its peers need the reverse link.
+            for sub_agent in sub_agents:
+                sub_agent.parent_agent = root_llm_agent
 
         return root_llm_agent, state_params
