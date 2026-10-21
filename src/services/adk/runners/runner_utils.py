@@ -46,11 +46,20 @@ import base64
 import json
 import uuid
 from src.services.temp_limits_service import check_session_limit
+from src.services.audio_transcription_service import (
+    env_api_key,
+    is_openai_key,
+    transcribe_audio,
+    transcription_enabled,
+)
 from src.services.session_service import SessionLimitExceeded
 from datetime import datetime
 from fastapi import HTTPException
 
 logger = setup_logger(__name__)
+
+# Sentinel: the transcription key is looked up once per request, on first audio.
+_UNRESOLVED = object()
 
 
 def convert_sets(obj):
@@ -275,6 +284,7 @@ class RunnerUtils:
 
         if files and len(files) > 0:
             inlined_bytes = 0
+            transcription_key = _UNRESOLVED
             for file_data in files:
                 try:
                     # Check if file is audio
@@ -294,6 +304,26 @@ class RunnerUtils:
                         )
                     )
 
+                    # Audio goes to the model as text. As an inline blob it
+                    # becomes an `audio_url` part that OpenAI rejects, and the
+                    # blob stays in the session, failing every later turn too.
+                    transcribed = False
+                    if is_audio:
+                        if transcription_key is _UNRESOLVED:
+                            transcription_key = await self._resolve_transcription_key(
+                                agent_id
+                            )
+                        if transcription_key:
+                            transcript = await transcribe_audio(
+                                file_bytes, file_data.filename, transcription_key
+                            )
+                            transcribed_texts.append(
+                                f"[Audio message transcription]: {transcript}"
+                                if transcript
+                                else "[The customer sent an audio message that could not be transcribed.]"
+                            )
+                            transcribed = True
+
                     # EVO-2181: add the file to the content parts so the model
                     # actually receives it. This append used to be gated behind
                     # `if is_audio`, so an image was blobbed and saved to the
@@ -304,10 +334,16 @@ class RunnerUtils:
                     # already in hand, and a failure while storing them must not
                     # cost the model its copy of the file and bring this very bug
                     # back.
-                    skip_reason = self._inline_skip_reason(
-                        file_data.content_type, len(file_bytes), inlined_bytes
+                    skip_reason = (
+                        None
+                        if transcribed
+                        else self._inline_skip_reason(
+                            file_data.content_type, len(file_bytes), inlined_bytes
+                        )
                     )
-                    if skip_reason:
+                    if transcribed:
+                        logger.info(f"Sent audio {file_data.filename} to the model as text")
+                    elif skip_reason:
                         logger.warning(
                             f"File {file_data.filename} ({file_data.content_type}) not sent"
                             f" to the model: {skip_reason}. Still saved as an artifact."
@@ -335,6 +371,37 @@ class RunnerUtils:
                     )
 
         return file_parts, transcribed_texts
+
+    async def _resolve_transcription_key(self, agent_id: str) -> Optional[str]:
+        """OpenAI key for transcription, or None to keep sending audio inline.
+
+        None leaves the previous behaviour intact for agents on a provider that
+        reads audio natively (Gemini) when no transcription key is configured.
+        """
+        if not transcription_enabled():
+            return None
+        if key := env_api_key():
+            return key
+
+        db = getattr(self, "db", None)
+        if db is None:
+            return None
+        try:
+            from src.services.adk.agents.agent_utils import get_api_key
+
+            agent = await get_agent(db, agent_id)
+            if not agent:
+                return None
+            api_key, provider = await get_api_key(db, agent)
+            if is_openai_key(api_key, provider):
+                return api_key
+            logger.info(
+                f"No OpenAI key for audio transcription (agent provider={provider});"
+                " sending audio inline"
+            )
+        except Exception as e:
+            logger.warning(f"Could not resolve audio transcription key: {e}")
+        return None
 
     # What google-adk can actually turn into a model content part. Its LiteLlm
     # path (`_get_content`) decodes text/* inline, maps image//audio//video/ to
